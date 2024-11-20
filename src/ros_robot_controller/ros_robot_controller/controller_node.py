@@ -41,21 +41,10 @@ class RosRobotController(Node):
         self.IMU_FRAME = self.get_parameter("imu_frame").value
 
         self.imu_pub = self.create_publisher(Imu, "~/imu_raw", 1)
-        self.joy_pub = self.create_publisher(Joy, "~/joy", 1)
-        self.sbus_pub = self.create_publisher(Sbus, "~/sbus", 1)
         self.button_pub = self.create_publisher(ButtonState, "~/button", 1)
-        self.battery_pub = self.create_publisher(UInt16, "~/battery", 1)
-        self.create_subscription(LedState, "~/set_led", self.set_led_state, 5)
         self.create_subscription(BuzzerState, "~/set_buzzer", self.set_buzzer_state, 5)
-        self.create_subscription(OLEDState, "~/set_oled", self.set_oled_state, 5)
         self.create_subscription(MotorsState, "~/set_motor", self.set_motor_state, 10)
         self.create_subscription(Bool, "~/enable_reception", self.enable_reception, 1)
-        self.create_subscription(
-            SetBusServoState, "~/bus_servo/set_state", self.set_bus_servo_state, 10
-        )
-        self.create_subscription(
-            ServosPosition, "~/bus_servo/set_position", self.set_bus_servo_position, 10
-        )
         self.create_subscription(
             SetPWMServoState, "~/pwm_servo/set_state", self.set_pwm_servo_state, 10
         )
@@ -65,7 +54,6 @@ class RosRobotController(Node):
         self.create_service(
             GetPWMServoState, "~/pwm_servo/get_state", self.get_pwm_servo_state
         )
-        self.create_subscription(RGBStates, "~/set_rgb", self.set_rgb_states, 10)
 
         self.load_servo_offsets()
 
@@ -83,16 +71,16 @@ class RosRobotController(Node):
                 config = yaml.safe_load(file)
 
             if not isinstance(config, dict):
-                self.get_logger().error(
-                    f"YAML: {config_path}"
-                )
+                self.get_logger().error(f"YAML: {config_path}")
                 return
 
             for servo_id in range(1, 4):
-                offset = config.get(servo_id, 0) 
+                offset = config.get(servo_id, 0)
                 try:
                     self.board.pwm_servo_set_offset(servo_id, offset)
-                    self.get_logger().info(f"Settings servo {servo_id} - Offset {offset}")
+                    self.get_logger().info(
+                        f"Settings servo {servo_id} - Offset {offset}"
+                    )
                 except Exception as e:
                     self.get_logger().error(f" {servo_id} Error: {e}")
 
