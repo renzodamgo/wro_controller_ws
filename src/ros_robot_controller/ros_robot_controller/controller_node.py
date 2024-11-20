@@ -67,10 +67,8 @@ class RosRobotController(Node):
         )
         self.create_subscription(RGBStates, "~/set_rgb", self.set_rgb_states, 10)
 
-        # 加载并设置舵机偏移量从 YAML 文件
         self.load_servo_offsets()
 
-        # 初始化电机速度
         self.board.set_motor_speed([[1, 0], [2, 0], [3, 0], [4, 0]])
 
         self.clock = self.get_clock()
@@ -387,7 +385,6 @@ def main():
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        # 安全关闭电机速度
         node.board.set_motor_speed([[1, 0], [2, 0], [3, 0], [4, 0]])
         node.destroy_node()
         rclpy.shutdown()
