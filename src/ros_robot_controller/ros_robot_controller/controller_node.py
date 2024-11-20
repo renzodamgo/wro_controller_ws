@@ -79,36 +79,31 @@ class RosRobotController(Node):
         self.get_logger().info("\033[1;32m%s\033[0m" % "start")
 
     def load_servo_offsets(self):
-        """
-        从 YAML 文件中读取舵机偏差设置。
-        """
-        config_path = "/ros2_hiwonder/software/Servo_upper_computer/servo_config.yaml"
+        config_path = "./../config/servo_config.yaml"
         try:
             with open(config_path, "r") as file:
                 config = yaml.safe_load(file)
 
-            # 确保config是字典
             if not isinstance(config, dict):
                 self.get_logger().error(
-                    f"YAML 配置文件格式错误: {config_path}，应为字典格式。"
+                    f"YAML: {config_path}"
                 )
                 return
 
-            # 遍历ID1到ID4并设置偏移量
-            for servo_id in range(1, 5):
-                offset = config.get(servo_id, 0)  # 如果未找到，默认偏移量为0
+            for servo_id in range(1, 4):
+                offset = config.get(servo_id, 0) 
                 try:
                     self.board.pwm_servo_set_offset(servo_id, offset)
-                    self.get_logger().info(f"已设置舵机 {servo_id} 的偏移量为 {offset}")
+                    self.get_logger().info(f"Settings servo {servo_id} - Offset {offset}")
                 except Exception as e:
-                    self.get_logger().error(f"设置舵机 {servo_id} 偏移量时出错: {e}")
+                    self.get_logger().error(f" {servo_id} Error: {e}")
 
         except FileNotFoundError:
-            self.get_logger().error(f"配置文件未找到: {config_path}")
+            self.get_logger().error(f"File not found: {config_path}")
         except yaml.YAMLError as e:
-            self.get_logger().error(f"解析 YAML 文件时出错: {e}")
+            self.get_logger().error(f"YAML Error: {e}")
         except Exception as e:
-            self.get_logger().error(f"读取配置文件时出错: {e}")
+            self.get_logger().error(f"Exception: {e}")
 
     def get_node_state(self, request, response):
         response.success = True
