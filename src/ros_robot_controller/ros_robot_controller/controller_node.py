@@ -14,14 +14,7 @@ from ros_robot_controller_msgs.msg import (
     ButtonState,
     BuzzerState,
     MotorsState,
-    BusServoState,
-    LedState,
-    SetBusServoState,
-    ServosPosition,
     SetPWMServoState,
-    Sbus,
-    OLEDState,
-    RGBStates,
     PWMServoState,
 )
 
@@ -47,9 +40,6 @@ class RosRobotController(Node):
         self.create_subscription(Bool, "~/enable_reception", self.enable_reception, 1)
         self.create_subscription(
             SetPWMServoState, "~/pwm_servo/set_state", self.set_pwm_servo_state, 10
-        )
-        self.create_service(
-            GetBusServoState, "~/bus_servo/get_state", self.get_bus_servo_state
         )
         self.create_service(
             GetPWMServoState, "~/pwm_servo/get_state", self.get_pwm_servo_state
@@ -162,114 +152,6 @@ class RosRobotController(Node):
             states.append(data)
         return [True, states]
 
-    def set_bus_servo_position(self, msg):
-        data = []
-        for i in msg.position:
-            data.extend([[i.id, i.position]])
-        if data:
-            self.board.bus_servo_set_position(msg.duration, data)
-
-    def set_bus_servo_state(self, msg):
-        data = []
-        servo_id = []
-        for i in msg.state:
-            if i.present_id:
-                if i.present_id[0]:
-                    if i.target_id:
-                        if i.target_id[0]:
-                            self.board.bus_servo_set_id(i.present_id[1], i.target_id[1])
-                    if i.position:
-                        if i.position[0]:
-                            data.extend([[i.present_id[1], i.position[1]]])
-                    if i.offset:
-                        if i.offset[0]:
-                            self.board.bus_servo_set_offset(
-                                i.present_id[1], i.offset[1]
-                            )
-                    if i.position_limit:
-                        if i.position_limit[0]:
-                            self.board.bus_servo_set_angle_limit(
-                                i.present_id[1], i.position_limit[1:]
-                            )
-                    if i.voltage_limit:
-                        if i.voltage_limit[0]:
-                            self.board.bus_servo_set_vin_limit(
-                                i.present_id[1], i.voltage_limit[1:]
-                            )
-                    if i.max_temperature_limit:
-                        if i.max_temperature_limit[0]:
-                            self.board.bus_servo_set_temp_limit(
-                                i.present_id[1], i.max_temperature_limit[1]
-                            )
-                    if i.enable_torque:
-                        if i.enable_torque[0]:
-                            self.board.bus_servo_enable_torque(
-                                i.present_id[1], i.enable_torque[1]
-                            )
-                    if i.save_offset:
-                        if i.save_offset[0]:
-                            self.board.bus_servo_save_offset(i.present_id[1])
-                    if i.stop:
-                        if i.stop[0]:
-                            servo_id.append(i.present_id[1])
-        if data != []:
-            self.board.bus_servo_set_position(msg.duration, data)
-        if servo_id != []:
-            self.board.bus_servo_stop(servo_id)
-
-    def get_bus_servo_state(self, request, response):
-        states = []
-        for i in request.cmd:
-            data = BusServoState()
-            if i.get_id:
-                state = self.board.bus_servo_read_id(i.id)
-                if state is not None:
-                    i.id = state[0]
-                    data.present_id = state
-            if i.get_position:
-                state = self.board.bus_servo_read_position(i.id)
-                if state is not None:
-                    data.position = state
-            if i.get_offset:
-                state = self.board.bus_servo_read_offset(i.id)
-                if state is not None:
-                    data.offset = state
-            if i.get_voltage:
-                state = self.board.bus_servo_read_voltage(i.id)
-                if state is not None:
-                    data.voltage = state
-            if i.get_temperature:
-                state = self.board.bus_servo_read_temp(i.id)
-                if state is not None:
-                    data.temperature = state
-            if i.get_position_limit:
-                state = self.board.bus_servo_read_angle_limit(i.id)
-                if state is not None:
-                    data.position_limit = state
-            if i.get_voltage_limit:
-                state = self.board.bus_servo_read_vin_limit(i.id)
-                if state is not None:
-                    data.voltage_limit = state
-            if i.get_max_temperature_limit:
-                state = self.board.bus_servo_read_temp_limit(i.id)
-                if state is not None:
-                    data.max_temperature_limit = state
-            if i.get_torque_state:
-                state = self.board.bus_servo_read_torque(i.id)
-                if state is not None:
-                    data.enable_torque = state
-            states.append(data)
-        response.state = states
-        response.success = True
-        return response
-
-    def pub_battery_data(self, pub):
-        data = self.board.get_battery()
-        if data is not None:
-            msg = UInt16()
-            msg.data = data
-            pub.publish(msg)
-
     def pub_button_data(self, pub):
         data = self.board.get_button()
         if data is not None:
@@ -293,23 +175,6 @@ class RosRobotController(Node):
                 pub.publish(msg)
             else:
                 self.get_logger().error(f"Unhandled button event: {key_event}")
-
-    def pub_joy_data(self, pub):
-        data = self.board.get_gamepad()
-        if data is not None:
-            msg = Joy()
-            msg.axes = data[0]
-            msg.buttons = data[1]
-            msg.header.stamp = self.clock.now().to_msg()
-            pub.publish(msg)
-
-    def pub_sbus_data(self, pub):
-        data = self.board.get_sbus()
-        if data is not None:
-            msg = Sbus()
-            msg.channel = data
-            msg.header.stamp = self.clock.now().to_msg()
-            pub.publish(msg)
 
     def pub_imu_data(self, pub):
         data = self.board.get_imu()
