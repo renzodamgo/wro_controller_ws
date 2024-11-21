@@ -16,13 +16,14 @@ setup(
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='ubuntu',
-    maintainer_email='1270161395@qq.com',
+    maintainer_email='renzo.damian.go@gmail.com',
     description='ROS 2 Robot Controller Package',
     license='TODO: License declaration',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'controller_node = ros_robot_controller.controller_node:main',
+            'controller_node = ros_robot_controller.acker_lidar_node:main',
         ],
     },
 )

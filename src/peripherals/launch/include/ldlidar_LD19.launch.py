@@ -27,7 +27,6 @@ def generate_launch_description():
                 'angle_crop_max': 225.0
             }
         ],
-        remappings=[('scan', scan_raw)]
     )
 
 
