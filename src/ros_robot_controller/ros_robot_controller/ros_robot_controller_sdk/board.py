@@ -593,7 +593,7 @@ if __name__ == "__main__":
     board.set_led(0.1, 0.9, 1,1)
     #board.set_led(0.1, 0.9, 5,2)
     board.set_buzzer(1900, 0.05, 0.01, 1)
-    board.pwm_acker_set_position(0.5,1200)
+    # board.pwm_acker_set_position(0.5,1200)
     # servo_id = 4
     # board.pwm_servo_set_position(0.5, [[servo_id, 1200]])
     # board.pwm_servo_set_offset(servo_id, 0)
