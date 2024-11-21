@@ -24,9 +24,9 @@ class AckerLidarController(Node):
         )
         
         # PID constants
-        self.Kp = 1.2
-        self.Ki = 0.1
-        self.Kd = 0.3
+        self.Kp = 500
+        self.Ki = 0.0
+        self.Kd = 100
         
         # PID variables
         self.previous_error = 0.0
