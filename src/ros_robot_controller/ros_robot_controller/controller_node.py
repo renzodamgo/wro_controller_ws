@@ -77,7 +77,7 @@ class RosRobotController(Node):
         self.get_logger().info("\033[1;32m%s\033[0m" % "start")
 
     def load_servo_offsets(self):
-        config_path = "./../config/servo_config.yaml"
+        config_path = "/home/damian/wro_controller_ws/src/ros_robot_controller/config/servo_config.yaml"
         try:
             with open(config_path, "r") as file:
                 config = yaml.safe_load(file)
@@ -88,7 +88,7 @@ class RosRobotController(Node):
                 )
                 return
 
-            for servo_id in range(1, 4):
+            for servo_id in range(1, 5):
                 offset = config.get(servo_id, 0) 
                 try:
                     self.board.pwm_servo_set_offset(servo_id, offset)
@@ -156,7 +156,12 @@ class RosRobotController(Node):
             if i.id and i.offset:
                 self.board.pwm_servo_set_offset(i.id[0], i.offset[0])
 
+        self.get_logger().info(
+            "data" + str(msg.data))
+        
         if data != []:
+            self.get_logger().info(
+            "data" + str(msg.duration, data))
             self.board.pwm_servo_set_position(msg.duration, data)
 
     def get_pwm_servo_state(self, msg):
