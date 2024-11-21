@@ -375,6 +375,9 @@ class Board:
             data.extend(struct.pack("<BH", i[0], i[1]))
         self.buf_write(PacketFunction.PACKET_FUNC_PWM_SERVO, data)
 
+    def pwm_acker_set_position(self, duration, position):
+        self.pwm_servo_set_position(duration, [[4, position]])
+
     def pwm_servo_set_offset(self, servo_id, offset):
         data = struct.pack("<BBb", 0x07, servo_id, int(offset))
         self.buf_write(PacketFunction.PACKET_FUNC_PWM_SERVO, data)
@@ -590,6 +593,7 @@ if __name__ == "__main__":
     board.set_led(0.1, 0.9, 1,1)
     #board.set_led(0.1, 0.9, 5,2)
     board.set_buzzer(1900, 0.05, 0.01, 1)
+    board.pwm_acker_set_position(0.5,1200)
     # servo_id = 4
     # board.pwm_servo_set_position(0.5, [[servo_id, 1200]])
     # board.pwm_servo_set_offset(servo_id, 0)

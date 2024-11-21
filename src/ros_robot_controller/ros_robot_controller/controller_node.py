@@ -23,6 +23,7 @@ from ros_robot_controller_msgs.msg import (
     OLEDState,
     RGBStates,
     PWMServoState,
+    SetAckerServoState
 )
 
 
@@ -59,6 +60,10 @@ class RosRobotController(Node):
         self.create_subscription(
             SetPWMServoState, "~/pwm_servo/set_state", self.set_pwm_servo_state, 10
         )
+        self.create_subscription(
+            SetAckerServoState, "~/acker_servo/set_state", self.set_acker_servo_state, 10
+        )
+
         self.create_service(
             GetBusServoState, "~/bus_servo/get_state", self.get_bus_servo_state
         )
@@ -163,6 +168,9 @@ class RosRobotController(Node):
             self.get_logger().info(
             "data" + str(msg.duration, data))
             self.board.pwm_servo_set_position(msg.duration, data)
+
+    def set_acker_servo_state(self, msg):
+        self.board.pwm_acker_set_position(msg.duration, msg.position)
 
     def get_pwm_servo_state(self, msg):
         states = []
