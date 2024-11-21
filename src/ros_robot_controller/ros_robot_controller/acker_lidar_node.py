@@ -33,8 +33,8 @@ class AckerLidarController(Node):
         
         # Center position for servo (typically 1500)
         self.center_position = 1500
-        self.max_position = 2000
-        self.min_position = 1000
+        self.max_position = 1800
+        self.min_position = 1200
         
         # Timer for control loop
         self.create_timer(0.1, self.control_loop)  # 10Hz control loop
@@ -94,6 +94,10 @@ def main(args=None):
     rclpy.init(args=args)
     controller = AckerLidarController()
     rclpy.spin(controller)
+    msg = SetAckerServoState()
+    msg.position = 1500
+    msg.duration = 0.2
+    controller.acker_publisher(msg)
     controller.destroy_node()
     rclpy.shutdown()
 

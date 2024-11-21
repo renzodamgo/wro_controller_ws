@@ -23,7 +23,7 @@ setup(
     entry_points={
         'console_scripts': [
             'controller_node = ros_robot_controller.controller_node:main',
-            'controller_node = ros_robot_controller.acker_lidar_node:main',
+            'acker_lidar_controller = ros_robot_controller.acker_lidar_node:main',
         ],
     },
 )
