@@ -24,6 +24,7 @@ setup(
         'console_scripts': [
             'controller_node = ros_robot_controller.controller_node:main',
             'acker_lidar_controller = ros_robot_controller.acker_lidar_node:main',
+            'follow_gap__node = ros_robot_controller.follow_gap_node:main'
         ],
     },
 )
