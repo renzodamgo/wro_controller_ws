@@ -28,7 +28,7 @@ class AckerLidarController(Node):
         self.min_position = 1200
         
         # Follow the gap parameters
-        self.bubble_radius = 0.2  # Safety bubble radius in meters
+        self.bubble_radius = 0.1  # Safety bubble radius in meters
         self.gap_threshold = 1.0  # Minimum gap width to consider
         self.angle_range = 120  # Total angle range to consider (degrees)
         
@@ -46,14 +46,6 @@ class AckerLidarController(Node):
         msg.duration = duration
         self.acker_publisher.publish(msg)
         self.get_logger().info(f'Published: position={position}, duration={duration}')
-
-    def preprocess_lidar_data(self, ranges, angle_min, angle_increment):
-        """Preprocess LIDAR data to handle invalid measurements"""
-        # Convert inf and nan to maximum range
-        processed = np.array(ranges)
-        processed[np.isinf(processed)] = 0.0
-        processed[np.isnan(processed)] = 0.0
-        return processed
 
     def find_max_gap(self, ranges, start_idx, end_idx):
         """Find the largest gap in the given range"""
@@ -90,43 +82,73 @@ class AckerLidarController(Node):
         max_range_idx = start_idx + np.argmax(ranges[start_idx:end_idx])
         return max_range_idx
 
+    def find_max_gap(self, processed_ranges):
+    # Step 1: Initialize variables to track the gap
+        max_gap_size = 0
+        max_gap_start = 0
+        current_gap_size = 0
+        current_gap_start = 0
+        
+        # Step 2: Find the nearest point
+        if len(processed_ranges) > 0:
+            min_dist = min(processed_ranges)
+            min_idx = processed_ranges.index(min_dist)
+            
+            # Step 3: Create safety bubble around nearest point
+            safety_radius = 0.5  # radius in meters
+            for i in range(len(processed_ranges)):
+                if abs(i - min_idx) <= safety_radius:
+                    processed_ranges[i] = 0
+        
+        # Step 4: Find maximum length sequence of non-zeros
+        for i in range(len(processed_ranges)):
+            if processed_ranges[i] > 0:
+                if current_gap_size == 0:
+                    current_gap_start = i
+                current_gap_size += 1
+            else:
+                if current_gap_size > max_gap_size:
+                    max_gap_size = current_gap_size
+                    max_gap_start = current_gap_start
+                current_gap_size = 0
+        
+        # Check final gap
+        if current_gap_size > max_gap_size:
+            max_gap_size = current_gap_size
+            max_gap_start = current_gap_start
+        
+        # Return the center index of the maximum gap
+        if max_gap_size > 0:
+            return max_gap_start + max_gap_size // 2
+        return -1
+
     def scan_callback(self, msg):
         try:
-            # Get the number of samples in the scan
-            num_samples = len(msg.ranges)
+            total_angles = len(msg.ranges)
             
-            # Calculate indices for the angle range we want to consider
-            angle_range_rad = np.radians(self.angle_range)
-            samples_per_side = int((angle_range_rad / 2) / msg.angle_increment)
-            center_idx = num_samples // 2
+            # Left side (around 60 degrees)
+            left_center = int(total_angles * (60 / 360))  # 60 degrees
             
-            start_idx = center_idx - samples_per_side
-            end_idx = center_idx + samples_per_side
+            # Right side (around 300 degrees)
+            right_center = int(total_angles * (300 / 360))  
             
-            # Preprocess the LIDAR data
-            self.processed_ranges = self.preprocess_lidar_data(
-                msg.ranges[start_idx:end_idx],
-                msg.angle_min,
-                msg.angle_increment
-            )
+            start_idx = left_center
+            end_idx = right_center
+
+            self.processed_ranges = [d for d in msg.ranges[start_idx:end_idx] if not np.isnan(d) and msg.range_min < d < msg.range_max]
             
-            # Find the largest gap
-            gap_start, gap_end = self.find_max_gap(
-                self.processed_ranges,
-                0,
-                len(self.processed_ranges)
-            )
+            idx_max_gap = self.find_max_gap(self.processed_ranges)
             
-            # Find the best point to aim for
-            best_point_idx = self.find_best_point(
-                self.processed_ranges,
-                gap_start,
-                gap_end
-            )
-            
-            # Convert to angle
-            center_angle = len(self.processed_ranges) // 2
-            self.best_heading = (best_point_idx - center_angle) * msg.angle_increment
+            # Calculate heading from -300 to 300
+            center_idx = len(self.processed_ranges) // 2
+            if idx_max_gap == -1:
+                self.best_heading = 1500
+            elif idx_max_gap < center_idx:
+                self.best_heading = 1300
+            elif idx_max_gap > center_idx:
+                self.best_heading = 1700
+
+            self.get_logger().info(f'Best heading: {self.best_heading}')
             
         except Exception as e:
             self.get_logger().error(f'Error in scan_callback: {str(e)}')
@@ -137,21 +159,22 @@ class AckerLidarController(Node):
             if self.best_heading is None:
                 return
                 
-            # Convert heading angle to servo position
-            # Scale the heading to servo range
-            angle_scale = 300  # Tuning parameter
-            steering = self.best_heading * angle_scale
+            steering = self.best_heading
             
             # Convert to servo position
-            position = int(self.center_position + steering)
+            # Subtract steering to correct direction (right is positive, left is negative)
+            # position = int(self.center_position - steering)
+            position = steering
             position = min(max(position, self.min_position), self.max_position)
             
+            self.get_logger().info(f'Steering: {steering}, Position: {position}')
             self.send_servo_command(position, 0.1)
             
         except Exception as e:
             self.get_logger().error(f'Error in control_loop: {str(e)}')
             # Center servo in case of error
             self.send_servo_command(self.center_position, 0.1)
+
 
 def main(args=None):
     rclpy.init(args=args)
