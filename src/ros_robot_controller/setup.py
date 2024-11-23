@@ -11,7 +11,9 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch',
-         ['launch/controller.launch.py'] )
+         ['launch/controller.launch.py']),
+         ('share/' + package_name + '/launch',
+         ['launch/pid.launch.py'])
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -24,7 +26,8 @@ setup(
         'console_scripts': [
             'controller_node = ros_robot_controller.controller_node:main',
             'acker_lidar_controller = ros_robot_controller.acker_lidar_node:main',
-            'follow_gap_node = ros_robot_controller.follow_gap_node:main'
+            'follow_gap_node = ros_robot_controller.follow_gap_node:main',
+            'color_detection_node = ros_robot_controller.color_detection_node:main'
         ],
     },
 )
