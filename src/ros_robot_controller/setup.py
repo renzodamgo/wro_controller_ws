@@ -27,7 +27,8 @@ setup(
             'controller_node = ros_robot_controller.controller_node:main',
             'acker_lidar_controller = ros_robot_controller.acker_lidar_node:main',
             'follow_gap_node = ros_robot_controller.follow_gap_node:main',
-            'color_detection_node = ros_robot_controller.color_detection_node:main'
+            'color_detection_node = ros_robot_controller.color_detection_node:main',
+            'reactive_follow_gap_node = ros_robot_controller.reactive_follow_gap_node:main'
         ],
     },
 )
