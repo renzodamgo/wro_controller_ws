@@ -59,7 +59,9 @@ def generate_launch_description():
         executable='scan_adapter',
         name='scan_adapter',
         output='screen',
-        parameters=[{'angle_offset': math.pi, 'reverse': False, 'frame_id': 'lidar_link'}],
+        # The LD19 only sees +-110 deg: behind, it hits the car itself at 2-8 cm.
+        parameters=[{'angle_offset': math.pi, 'reverse': False, 'frame_id': 'lidar_link',
+                     'fov_deg': 110.0, 'min_valid_range': 0.12}],
         remappings=[('scan_in', '/scan'), ('scan_out', '/robotek/scan')],
         condition=detector_on,
     )
@@ -70,6 +72,8 @@ def generate_launch_description():
         name='obstacle_detector',
         output='screen',
         remappings=[('/scan', '/robotek/scan'), ('/camera/image', '/usb_cam/image_raw')],
+        # Real camera, measured 8 oct 2026 (robotek_common.vehicle REAL_CAMERA_*).
+        parameters=[{'camera_hfov': 0.946, 'camera_pitch': 0.26}],
         condition=detector_on,
     )
 
