@@ -73,7 +73,7 @@ def generate_launch_description():
         output='screen',
         remappings=[('/scan', '/robotek/scan'), ('/camera/image', '/usb_cam/image_raw')],
         # Real camera, measured 8 oct 2026 (robotek_common.vehicle REAL_CAMERA_*).
-        parameters=[{'camera_hfov': 0.946, 'camera_pitch': 0.26}],
+        parameters=[{'camera_hfov': 1.164, 'camera_pitch': 0.17, 'camera_yaw': 0.077}],
         condition=detector_on,
     )
 
