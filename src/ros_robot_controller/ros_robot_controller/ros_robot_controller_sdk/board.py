@@ -100,6 +100,9 @@ class Board:
         self.enable_recv = False
         self.frame = []
         self.recv_count = 0
+        self.device = device
+        self.baudrate = baudrate
+        self.timeout = timeout
 
         self.port = serial.Serial(None, baudrate, timeout=timeout)
         self.port.rts = False
@@ -110,6 +113,8 @@ class Board:
         self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
         self.servo_read_lock = threading.Lock()
         self.pwm_servo_read_lock = threading.Lock()
+        self._reconnect_lock = threading.Lock()
+        self._last_reconnect_try = 0.0
 
         # 队列用来存储数据(use queue to store data)
         self.sys_queue = queue.Queue(maxsize=1)
@@ -316,13 +321,56 @@ class Board:
             print('get_sbus enable reception first!')
             return None
 
+    def _reconnect(self, motivo=""):
+        """Reabre el puerto serie tras un error de E/S.
+
+        AUDITORIA -- journalctl del Pi mostro resets reales de USB en los
+        puertos del RRC Lite (bus 4) durante corridas normales, sin ningun
+        error visible en ROS. La causa: ni buf_write() ni recv_task()
+        atrapaban nada, asi que un reset de bus tiraba una excepcion sin
+        atrapar que mataba recv_task PARA SIEMPRE (hilo daemon, nadie lo
+        reinicia) y dejaba el servo/motor sin responder en silencio.
+
+        UN solo intento por llamada, sin bucle de reintento bloqueante:
+        motor/controller_node vuelven a llamar a esto en su propio ciclo
+        (20-50 Hz), asi que no hace falta reintentar aca adentro -- y
+        bloquear aca con sleeps trabaria ese hilo (tipicamente el callback
+        de ROS que manda el comando). Rate-limitado a una vez cada 0.5s para
+        no meter metralla de intentos de apertura mientras el dispositivo
+        sigue sin volver.
+        """
+        with self._reconnect_lock:
+            ahora = time.monotonic()
+            if ahora - self._last_reconnect_try < 0.5:
+                return False
+            self._last_reconnect_try = ahora
+            try:
+                self.port.close()
+            except Exception:
+                pass
+            try:
+                self.port = serial.Serial(None, self.baudrate, timeout=self.timeout)
+                self.port.rts = False
+                self.port.dtr = False
+                self.port.setPort(self.device)
+                self.port.open()
+                print(f"board: puerto reconectado ({motivo})")
+                return True
+            except Exception as e:
+                print(f"board: reconexion fallida ({motivo}): {e}")
+                return False
+
     def buf_write(self, func, data):
         buf = [0xAA, 0x55, int(func)]
         buf.append(len(data))
         buf.extend(data)
         buf.append(checksum_crc8(bytes(buf[2:])))
         buf = bytes(buf)
-        self.port.write(buf)
+        try:
+            self.port.write(buf)
+        except (serial.SerialException, OSError) as e:
+            print(f"board: error al escribir ({e})")
+            self._reconnect("escritura")
         #print(buf)
 
 
@@ -339,7 +387,7 @@ class Board:
     def set_motor_speed(self, speeds):
         data = [0x01, len(speeds)]
         for i in speeds:
-            data.extend(struct.pack("<Bf", int(i[0] - 1), float(i[1])))
+            data.extend(struct.pack("<Bf", int(i[0] - 1), float(i[1]*0.75)))
         self.buf_write(PacketFunction.PACKET_FUNC_MOTOR, data)
     
     '''
@@ -376,7 +424,7 @@ class Board:
         self.buf_write(PacketFunction.PACKET_FUNC_PWM_SERVO, data)
 
     def pwm_acker_set_position(self, duration, position):
-        self.pwm_servo_set_position(duration, [[4, position]])
+        self.pwm_servo_set_position(duration, [[2, position]])
 
     def pwm_servo_set_offset(self, servo_id, offset):
         data = struct.pack("<BBb", 0x07, servo_id, int(offset))
@@ -486,7 +534,14 @@ class Board:
     def recv_task(self):
         while True:
             if self.enable_recv:
-                recv_data = self.port.read()
+                try:
+                    recv_data = self.port.read()
+                except (serial.SerialException, OSError) as e:
+                    print(f"board: error al leer ({e})")
+                    self._reconnect("lectura")
+                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
+                    time.sleep(0.1)
+                    continue
                 if recv_data:
                     for dat in recv_data:
                         # print("%0.2X "%dat)

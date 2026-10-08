@@ -29,6 +29,13 @@ setup(
             'joystick_control = peripherals.joystick_control:main',
             'tf_broadcaster_imu = peripherals.tf_broadcaster_imu:main',
             'teleop_key_control = peripherals.teleop_key_control:main',
+            'camera_publisher = peripherals.camera_publisher:main',
+            'rpicam_publisher= peripherals.rpicam_publisher:main',
+            'pose_estimator = peripherals.pose_estimator:main',
+            'pose_estimator_rpi = peripherals.pose_estimator_rpi:main',
+            'camera_streamer = peripherals.camera_streamer:main',
+            'stream = peripherals.stream:main',
+            'led_light = peripherals.led_light:main',
         ],
     },
 )

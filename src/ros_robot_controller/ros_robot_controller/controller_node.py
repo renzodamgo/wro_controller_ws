@@ -33,7 +33,17 @@ class RosRobotController(Node):
     def __init__(self, name):
         rclpy.init()
         super().__init__(name)
-        self.board = Board()
+        # Ruta estable por id de USB (vendor/product/serial), no por numero
+        # de enumeracion: /dev/ttyACM0 puede pasar a ttyACM1 (o ttyUSB*) si
+        # el adaptador se desconecta y reconecta a mitad de una corrida, y
+        # Board() con el device por defecto se queda escribiendo a un file
+        # handle muerto sin ningun error visible (sin ACK del lado del
+        # servo/motor). El symlink de /dev/serial/by-id/ lo genera udev
+        # automaticamente a partir del vendor/product/serial del adaptador,
+        # asi que apunta al nodo correcto sin importar el orden de
+        # enumeracion. Mismo patron ya usado en recto_servo_test.py.
+        self.board = Board(
+            device="/dev/serial/by-id/usb-1a86_USB_Single_Serial_586B015678-if00")
         self.board.enable_reception()
         self.running = True
 
@@ -82,7 +92,7 @@ class RosRobotController(Node):
         self.get_logger().info("\033[1;32m%s\033[0m" % "start")
 
     def load_servo_offsets(self):
-        config_path = "/home/damian/wro_controller_ws/src/ros_robot_controller/config/servo_config.yaml"
+        config_path = "/home/revine/wro_controller_ws/src/ros_robot_controller/config/servo_config.yaml"
         try:
             with open(config_path, "r") as file:
                 config = yaml.safe_load(file)
@@ -147,7 +157,7 @@ class RosRobotController(Node):
     def set_motor_state(self, msg):
         data = []
         for i in msg.data:
-            data.extend([[i.id, i.rps]])
+            data.extend([[i.id, -i.rps]])
         self.board.set_motor_speed(data)
 
     def set_oled_state(self, msg):

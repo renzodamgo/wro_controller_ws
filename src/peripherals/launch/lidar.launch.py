@@ -14,6 +14,7 @@ def generate_launch_description():
         default_value='scan',
         description='Topic name for lidar scan data'
     )
+    
     lidar_frame_arg = DeclareLaunchArgument(
         'lidar_frame',
         default_value='lidar_frame',
@@ -36,7 +37,7 @@ def generate_launch_description():
     return LaunchDescription([
         scan_topic_arg,
         lidar_frame_arg,
-        ld19_launch,
+        ld19_launch
     ])
 
 

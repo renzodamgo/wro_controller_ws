@@ -1,0 +1,418 @@
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Float32, String
+from ros_robot_controller_msgs.msg import SetAckerServoState, ButtonState
+import numpy as np
+import math
+import time
+
+# El buzzer del ros_robot_controller (Hiwonder). Si el mensaje no existe en tu
+# versión, el beep se omite sin romper el nodo.
+try:
+    from ros_robot_controller_msgs.msg import BuzzerState
+    BUZZER_DISPONIBLE = True
+except ImportError:
+    BUZZER_DISPONIBLE = False
+
+# =============================================================================
+#                        CONFIGURACIÓN RÁPIDA (editar aquí)
+# =============================================================================
+
+# ---- Pared a seguir -----------------------------------------------------------
+LADO_A_SEGUIR = 'izquierda'          # 'izquierda' o 'derecha'
+DIST_OBJETIVO = 0.18               # [m] distancia deseada a la pared (18 cm)
+
+# ---- PID de seguimiento de pared ---------------------------------------------
+# El error está en METROS y la salida en MICROSEGUNDOS de servo.
+#   error > 0 → lejos de la pared → giro hacia la pared
+#   error < 0 → cerca de la pared → giro alejándose
+# Orden sugerido de sintonía: primero KP (KI=KD=0), luego KD para frenar la
+# oscilación, y por último KI (pequeño) si queda un error constante.
+PID_KP = 2500.0                    # [us/m]   ej: 4 cm de error → 100 us de giro
+PID_KI = 0.0                       # [us/(m·s)]
+PID_KD = 300.0                     # [us·s/m]
+PID_SALIDA_MAX = 350               # [us] giro máximo respecto del centro (tope ~490)
+PID_INTEGRAL_MAX = 0.10            # [m·s] límite anti-windup del término integral
+PID_BANDA_MUERTA = 0.005           # [m] errores menores a esto se toman como 0
+PID_FILTRO_D = 0.5                 # 0..1 suavizado del término derivativo (1 = sin filtro)
+
+# ---- Esquina EXTERIOR (frente cerrado, un lateral muy abierto) ----------------
+# Única regla de esquina activa.
+ESQ_EXT_FRONTAL_MAX = 0.4         # [m] frente menor a esto...
+ESQ_EXT_LATERAL_LIBRE_MIN = 2   # [m] ...y un lateral mayor a esto → giro a ese lado
+
+# ---- Tiempos de la maniobra de esquina ----------------------------------------
+T_FRENO = 0.5                      # [s] robot detenido antes de girar
+T_MANIOBRA = 2                     # [s] girando y avanzando
+
+# ---- Retroceso posterior a la maniobra ----------------------------------------
+T_RETROCESO = 1.5                  # [s] tiempo retrocediendo
+VEL_RETROCESO = -70.0              # velocidad de retroceso (70% hacia atrás)
+T_NEUTRO = 0.2                     # [s] en neutro antes de invertir el sentido (ESC)
+RETROCESO_CONTRAGIRO = False       # False = retrocede recto
+                                   # True  = retrocede con el volante al lado contrario
+
+# ---- Beep ---------------------------------------------------------------------
+BEEP_FREQ = 0                      # [Hz]
+BEEP_DURACION = 0.15               # [s]
+
+# ---- Velocidades --------------------------------------------------------------
+VEL_SEGUIMIENTO = 30.0             # velocidad normal (PID)
+VEL_MANIOBRA = 40.0                # velocidad durante el giro de esquina
+
+# ---- Servo de dirección -------------------------------------------------------
+SERVO_CENTRO = 1500
+SERVO_MAX = 2040                   # tope hacia la IZQUIERDA
+SERVO_MIN = 1010                   # tope hacia la DERECHA
+SERVO_GIRO_IZQUIERDA = SERVO_MAX-300   # posición usada al girar a la izquierda en la maniobra
+SERVO_GIRO_DERECHA = SERVO_MIN+300     # posición usada al girar a la derecha en la maniobra
+
+# ---- LiDAR --------------------------------------------------------------------
+# Convención ROS estándar (REP-103), vista desde arriba:
+#   0°  = frente (+X)
+#  +90° = izquierda (+Y)
+#  -90° = derecha  (equivale a 270°)
+#   el ángulo crece en sentido ANTIHORARIO.
+ANG_FRENTE = 0.0                   # [°] frente
+ANG_IZQUIERDA = 90.0               # [°] izquierda pura
+ANG_DERECHA = -90.0                # [°] derecha pura
+
+# Desfase por montaje físico del sensor (LiDAR montado girado 180°).
+OFFSET_MONTAJE_DEG = 180.0
+
+SEMI_ANCHO_SECTOR = 7              # cantidad de rayos a cada lado del centro
+DIST_SIN_LECTURA = 5.0             # [m] valor asumido si un sector no tiene lecturas válidas
+
+# ---- General ------------------------------------------------------------------
+TIEMPO_MAXIMO = 80                 # [s] apagado automático
+USAR_CAMARA = False
+# =============================================================================
+
+
+class AckerLidarController(Node):
+    def __init__(self):
+        super().__init__('acker_lidar_node')
+
+        # Publishers
+        self.acker_publisher = self.create_publisher(
+            SetAckerServoState,
+            '/ros_robot_controller/acker_servo/set_state',
+            10
+        )
+        self.vel_pub = self.create_publisher(Float32, '/motor_vel', 10)
+        self.buzzer_pub = None
+        if BUZZER_DISPONIBLE:
+            self.buzzer_pub = self.create_publisher(
+                BuzzerState, '/ros_robot_controller/set_buzzer', 10
+            )
+
+        # Subscribers
+        self.scan_subscription = self.create_subscription(
+            LaserScan, '/scan', self.scan_callback, 10
+        )
+        self.button_subscription = self.create_subscription(
+            ButtonState, '/ros_robot_controller/button', self.button_callback, 10
+        )
+        self.obst_subscription = self.create_subscription(
+            String, '/obstaculos', self.obst_callback, 10
+        )
+
+        # Lado a seguir
+        self.seguir_izquierda = (LADO_A_SEGUIR.strip().lower() == 'izquierda')
+
+        # PID
+        self.current_error = 0.0
+        self.pid_integral = 0.0
+        self.pid_error_prev = 0.0
+        self.pid_deriv_filt = 0.0
+        self.pid_t_prev = None
+
+        # Sesgo de setpoint por obstáculo (cámara)
+        self.declare_parameter('sp_step', 0.00)  # [m]
+        self.sp_step = float(self.get_parameter('sp_step').value)
+        self.sp_diff = 0.0
+
+        # Distancias
+        self.front_distance = DIST_SIN_LECTURA
+        self.left_avg = DIST_SIN_LECTURA
+        self.right_avg = DIST_SIN_LECTURA
+
+        # Máquina de estados: 'SEGUIR' | 'FRENO' | 'MANIOBRA' | 'NEUTRO' | 'RETROCESO'
+        self.estado = 'SEGUIR'
+        self.t_estado = 0.0          # instante en que se entró al estado actual
+        self.giro_servo = SERVO_CENTRO
+        self.servo_retro = SERVO_CENTRO
+
+        # Estado general
+        self.button_pressed = False
+        self.time = 0
+
+        # Timers
+        self.create_timer(0.1, self.control_loop)  # 10 Hz
+        self.create_timer(1.0, self.timer_loop)
+        self.get_logger().info(
+            f'Acker Lidar Controller (PID) started — siguiendo pared {LADO_A_SEGUIR} '
+            f'a {DIST_OBJETIVO*100:.0f} cm  (Kp={PID_KP} Ki={PID_KI} Kd={PID_KD})'
+        )
+
+    # ----------------- Callbacks -----------------
+    def obst_callback(self, msg: String):
+        ok = USAR_CAMARA
+        data = msg.data.strip().lower()
+        if data == 'verde' and ok:
+            self.sp_diff = +self.sp_step
+        elif data == 'rojo' and ok:
+            self.sp_diff = -self.sp_step
+        else:
+            self.sp_diff = 0.0
+
+    def timer_loop(self):
+        if self.button_pressed:
+            self.time += 1
+            if self.time == TIEMPO_MAXIMO:
+                self.stop_motors()
+                self.button_pressed = False
+
+    def button_callback(self, msg):
+        self.button_pressed = True
+
+    # ----------------- Utilidades -----------------
+    def send_servo_command(self, position, duration):
+        msg = SetAckerServoState()
+        msg.position = int(position)
+        msg.duration = float(duration)
+        self.acker_publisher.publish(msg)
+
+    def stop_motors(self):
+        self.vel_pub.publish(Float32(data=0.0))
+        self.get_logger().info('Stopping motor (duty=0%)')
+
+    def beep(self):
+        if self.buzzer_pub is None:
+            return
+        msg = BuzzerState()
+        msg.freq = int(BEEP_FREQ)
+        msg.on_time = float(BEEP_DURACION)
+        msg.off_time = 0.0
+        msg.repeat = 1
+        self.buzzer_pub.publish(msg)
+
+    def angulo_a_indice(self, msg: LaserScan, angulo_rad):
+        """Convierte un ángulo (rad, convención REP-103) al índice del rayo
+        correspondiente usando la info real del mensaje."""
+        total = len(msg.ranges)
+        idx = int(round((angulo_rad - msg.angle_min) / msg.angle_increment))
+        return idx % total
+
+    def sector_promedio(self, msg: LaserScan, angulo_deg):
+        """Promedio de un sector centrado en 'angulo_deg' (más el offset de
+        montaje). Si no hay lecturas válidas devuelve DIST_SIN_LECTURA."""
+        total = len(msg.ranges)
+        ang = math.radians(angulo_deg + OFFSET_MONTAJE_DEG)
+        centro = self.angulo_a_indice(msg, ang)
+        idx = [(centro + k) % total for k in range(-SEMI_ANCHO_SECTOR, SEMI_ANCHO_SECTOR + 1)]
+        validos = [msg.ranges[i] for i in idx
+                   if not np.isnan(msg.ranges[i]) and msg.range_min < msg.ranges[i] < msg.range_max]
+        if not validos:
+            return DIST_SIN_LECTURA
+        return float(sum(validos) / len(validos))
+
+    # ----------------- LiDAR -----------------
+    def scan_callback(self, msg: LaserScan):
+        if not self.button_pressed:
+            return
+        try:
+            self.left_avg = self.sector_promedio(msg, ANG_IZQUIERDA)
+            self.right_avg = self.sector_promedio(msg, ANG_DERECHA)
+            self.front_distance = self.sector_promedio(msg, ANG_FRENTE)
+
+            # Error: positivo → estamos LEJOS de la pared (hay que acercarse)
+            #        negativo → estamos CERCA de la pared (hay que alejarse)
+            if self.seguir_izquierda:
+                self.current_error = self.left_avg - (DIST_OBJETIVO + self.sp_diff)
+            else:
+                self.current_error = self.right_avg - (DIST_OBJETIVO + self.sp_diff)
+
+        except Exception as e:
+            self.get_logger().error(f'Error in scan_callback: {e}')
+            self.current_error = 0.0
+            self.front_distance = DIST_SIN_LECTURA
+
+    # ----------------- Detección de esquinas -----------------
+    def detectar_esquina(self):
+        """Solo esquina EXTERIOR: frente muy cerca y un lateral muy abierto.
+        Devuelve 'izquierda', 'derecha' o None."""
+        f, l, r = self.front_distance, self.left_avg, self.right_avg
+
+        if f < ESQ_EXT_FRONTAL_MAX:
+            if l > ESQ_EXT_LATERAL_LIBRE_MIN and r > ESQ_EXT_LATERAL_LIBRE_MIN:
+                return 'izquierda' if l >= r else 'derecha'
+            if l > ESQ_EXT_LATERAL_LIBRE_MIN:
+                return 'izquierda'
+            if r > ESQ_EXT_LATERAL_LIBRE_MIN:
+                return 'derecha'
+
+        return None
+
+    # ----------------- PID -----------------
+    def pid_control(self):
+        """Devuelve la posición del servo calculada por el PID sobre el error
+        de distancia a la pared."""
+        ahora = time.time()
+        if self.pid_t_prev is None:
+            dt = 0.1
+        else:
+            dt = ahora - self.pid_t_prev
+            if dt <= 0.0 or dt > 0.5:   # primera vez / lazo pausado → dt nominal
+                dt = 0.1
+        self.pid_t_prev = ahora
+
+        e = self.current_error
+        if abs(e) < PID_BANDA_MUERTA:
+            e = 0.0
+
+        # P
+        p = PID_KP * e
+
+        # I con anti-windup por saturación del integrador
+        self.pid_integral += e * dt
+        self.pid_integral = max(-PID_INTEGRAL_MAX, min(PID_INTEGRAL_MAX, self.pid_integral))
+        i = PID_KI * self.pid_integral
+
+        # D sobre el error, con filtro pasa-bajos simple
+        deriv = (e - self.pid_error_prev) / dt
+        self.pid_deriv_filt = PID_FILTRO_D * deriv + (1.0 - PID_FILTRO_D) * self.pid_deriv_filt
+        d = PID_KD * self.pid_deriv_filt
+        self.pid_error_prev = e
+
+        salida = p + i + d
+        salida = max(-PID_SALIDA_MAX, min(PID_SALIDA_MAX, salida))
+
+        # Traducir "hacia la pared" a izquierda/derecha del servo.
+        # servo > centro = izquierda, servo < centro = derecha.
+        # salida > 0 significa "girar hacia la pared".
+        signo = +1 if self.seguir_izquierda else -1
+        position = SERVO_CENTRO + signo * salida
+
+        return int(min(max(position, SERVO_MIN), SERVO_MAX))
+
+    def reset_pid(self):
+        # Tras una esquina el historial del PID ya no sirve
+        self.pid_integral = 0.0
+        self.pid_error_prev = self.current_error
+        self.pid_deriv_filt = 0.0
+        self.pid_t_prev = None
+
+    # ----------------- Lazo de control -----------------
+    def control_loop(self):
+        if not self.button_pressed:
+            self.vel_pub.publish(Float32(data=0.0))
+            return
+
+        try:
+            ahora = time.time()
+
+            # ---------- ESTADO: FRENO ----------
+            if self.estado == 'FRENO':
+                self.vel_pub.publish(Float32(data=0.0))
+                self.send_servo_command(SERVO_CENTRO, 0.1)
+                if ahora - self.t_estado >= T_FRENO:
+                    self.estado = 'MANIOBRA'
+                    self.t_estado = ahora
+                    self.get_logger().info('Esquina: girando')
+                return
+
+            # ---------- ESTADO: MANIOBRA ----------
+            if self.estado == 'MANIOBRA':
+                self.send_servo_command(self.giro_servo, 0.1)
+                self.vel_pub.publish(Float32(data=VEL_MANIOBRA))
+                if ahora - self.t_estado >= T_MANIOBRA:
+                    # Dirección de las ruedas durante el retroceso
+                    if RETROCESO_CONTRAGIRO:
+                        self.servo_retro = (SERVO_GIRO_DERECHA
+                                            if self.giro_servo == SERVO_GIRO_IZQUIERDA
+                                            else SERVO_GIRO_IZQUIERDA)
+                    else:
+                        self.servo_retro = SERVO_CENTRO
+
+                    self.estado = 'NEUTRO'
+                    self.t_estado = ahora
+                    self.vel_pub.publish(Float32(data=0.0))
+                    self.get_logger().info('Esquina: neutro antes de retroceder')
+                return
+
+            # ---------- ESTADO: NEUTRO (necesario para invertir el ESC) ----------
+            if self.estado == 'NEUTRO':
+                self.vel_pub.publish(Float32(data=0.0))
+                self.send_servo_command(self.servo_retro, 0.1)
+                if ahora - self.t_estado >= T_NEUTRO:
+                    self.estado = 'RETROCESO'
+                    self.t_estado = ahora
+                    self.get_logger().info('Esquina: retrocediendo')
+                return
+
+            # ---------- ESTADO: RETROCESO ----------
+            if self.estado == 'RETROCESO':
+                self.send_servo_command(self.servo_retro, 0.1)
+                self.vel_pub.publish(Float32(data=VEL_RETROCESO))
+                if ahora - self.t_estado >= T_RETROCESO:
+                    self.vel_pub.publish(Float32(data=0.0))
+                    self.send_servo_command(SERVO_CENTRO, 0.1)
+                    self.estado = 'SEGUIR'
+                    self.t_estado = ahora
+                    self.reset_pid()
+                    self.get_logger().info('Esquina: volviendo al PID')
+                return
+
+            # ---------- ESTADO: SEGUIR (prioridad: esquinas) ----------
+            lado = self.detectar_esquina()
+            if lado is not None:
+                self.giro_servo = SERVO_GIRO_IZQUIERDA if lado == 'izquierda' else SERVO_GIRO_DERECHA
+                self.estado = 'FRENO'
+                self.t_estado = ahora
+                self.vel_pub.publish(Float32(data=0.0))
+                self.beep()
+                self.get_logger().info(
+                    f'Esquina detectada → {lado} '
+                    f'(F={self.front_distance:.2f} L={self.left_avg:.2f} R={self.right_avg:.2f})'
+                )
+                return
+
+            # PID normal
+            position = self.pid_control()
+            self.send_servo_command(position, 0.1)
+            self.vel_pub.publish(Float32(data=VEL_SEGUIMIENTO))
+
+        except Exception as e:
+            self.get_logger().error(f'Error in control_loop: {str(e)}')
+            try:
+                self.send_servo_command(SERVO_CENTRO, 0.1)
+            except Exception:
+                pass
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    controller = None
+    try:
+        controller = AckerLidarController()
+        rclpy.spin(controller)
+    except Exception as e:
+        print(f'Error in main: {e}')
+    finally:
+        try:
+            if controller is not None:
+                msg = SetAckerServoState()
+                msg.position = 1200
+                msg.duration = 0.2
+                controller.acker_publisher.publish(msg)
+                controller.vel_pub.publish(Float32(data=0.0))
+                controller.destroy_node()
+        except Exception:
+            pass
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

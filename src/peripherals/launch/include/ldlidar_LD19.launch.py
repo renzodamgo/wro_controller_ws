@@ -19,7 +19,7 @@ def generate_launch_description():
                 'topic_name': 'scan',
                 'product_name': 'LDLiDAR_LD19',
                 'port_baudrate': 230400,
-                'port_name': '/dev/ttyUSB0',
+                'port_name': '/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0',
                 'frame_id': lidar_frame,
                 'laser_scan_dir': True,
                 'enable_angle_crop_func': False,

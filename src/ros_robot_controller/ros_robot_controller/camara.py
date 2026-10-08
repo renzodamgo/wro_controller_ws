@@ -34,24 +34,17 @@ class AckerLidarController(Node):
         self.declare_parameter('follow_side', 'left')
         side_param = self.get_parameter('follow_side').get_parameter_value().string_value.lower()
         self.follow_side = 'left' if side_param in ('left', 'izquierda') else 'right'
-        self.default_side = self.follow_side
         self.get_logger().info(f'Seguidor configurado para pared a la {self.follow_side}.')
 
         # --- Mapeo color -> lado de pared a seguir ---
-        # Convención WRO: pilar ROJO se pasa por su derecha  -> seguir pared DERECHA
-        #                 pilar VERDE se pasa por su izquierda -> seguir pared IZQUIERDA
+        # Convención WRO: el pilar ROJO se pasa por su derecha  -> seguir pared DERECHA
+        #                 el pilar VERDE se pasa por su izquierda -> seguir pared IZQUIERDA
         # Si en tu pista es al revés, solo invierte este diccionario.
         self.color_to_side = {'rojo': 'right', 'verde': 'left'}
         self.dir_to_side = {
             'izquierda': 'left', 'left': 'left', 'l': 'left', 'izq': 'left',
             'derecha': 'right', 'right': 'right', 'r': 'right', 'der': 'right',
         }
-
-        # --- Estado de color activo (manda sobre la evasión por lidar) ---
-        self.active_color = None
-        self.color_stamp = 0.0
-        self.color_valid_window = 1.5    # s sin mensaje de color -> se considera vencido
-        self.min_turn_clearance = 0.25   # m mínimos del lado hacia el que se quiere girar
 
         # Antirrebote de cambios de lado
         self.last_side_change = 0.0
@@ -102,7 +95,7 @@ class AckerLidarController(Node):
         self.front_ema = None
 
         self.create_timer(0.1, self.control_loop)
-        self.get_logger().info('Acker Lidar Controller (PD + color prioritario) listo.')
+        self.get_logger().info('Acker Lidar Controller (PD + color + freno/retroceso) listo.')
 
     # -------- utilidades --------
     @staticmethod
@@ -132,26 +125,6 @@ class AckerLidarController(Node):
         self.deriv_filt = 0.0
         self.last_t = time.time()
 
-    def _color_active(self):
-        """True si hay un color vigente (no vencido) que deba mandar sobre el lidar."""
-        if self.active_color is None:
-            return False
-        return (time.time() - self.color_stamp) < self.color_valid_window
-
-    def _apply_side(self, target, origen):
-        """Cambia follow_side con antirrebote."""
-        if target == self.follow_side:
-            return
-        now = time.time()
-        if now - self.last_side_change < self.side_change_cooldown:
-            return
-        self.follow_side = target
-        self.last_side_change = now
-        self._reset_pd()
-        self.send_servo(self.center_us, 0.1)
-        label = 'IZQUIERDA' if target == 'left' else 'DERECHA'
-        self.get_logger().info(f'[{origen}] Cambiando a seguidor de pared por la {label}.')
-
     # -------- callbacks --------
     def button_callback(self, _):
         self.button_pressed = True
@@ -161,24 +134,30 @@ class AckerLidarController(Node):
         txt = msg.data.strip().lower()
 
         if txt in self.color_to_side:
-            self.active_color = txt
-            self.color_stamp = time.time()
-            self._apply_side(self.color_to_side[txt], txt)
+            target = self.color_to_side[txt]
+        elif txt in self.dir_to_side:
+            target = self.dir_to_side[txt]
+        elif txt in ('sin_color', 'ninguno', 'none', ''):
+            return  # sin detección: conserva el lado actual
+        else:
+            self.get_logger().warn(
+                f'Mensaje no reconocido en /obstaculos: "{msg.data}"', throttle_duration_sec=2.0
+            )
             return
 
-        if txt in self.dir_to_side:
-            # orden manual de lado: no cuenta como color activo
-            self._apply_side(self.dir_to_side[txt], txt)
+        if target == self.follow_side:
             return
 
-        if txt in ('sin_color', 'ninguno', 'none', ''):
-            # se pierde el pilar: el lidar recupera el mando, el lado se conserva
-            self.active_color = None
-            return
+        now = time.time()
+        if now - self.last_side_change < self.side_change_cooldown:
+            return  # ignora rebotes rápidos
 
-        self.get_logger().warn(
-            f'Mensaje no reconocido en /obstaculos: "{msg.data}"', throttle_duration_sec=2.0
-        )
+        self.follow_side = target
+        self.last_side_change = now
+        self._reset_pd()
+        self.send_servo(self.center_us, 0.1)
+        label = 'IZQUIERDA' if target == 'left' else 'DERECHA'
+        self.get_logger().info(f'[{txt}] Cambiando a seguidor de pared por la {label}.')
 
     def scan_callback(self, msg: LaserScan):
         try:
@@ -218,6 +197,7 @@ class AckerLidarController(Node):
             cone = [d for d in msg.ranges[cs:ce] if rmin < d < rmax]
 
             if len(cone) >= 3:
+                # promedio de los 3 más cercanos: evita disparos por un rayo ruidoso
                 self.front_min_cone = float(np.mean(sorted(cone)[:3]))
             elif cone:
                 self.front_min_cone = float(min(cone))
@@ -236,30 +216,6 @@ class AckerLidarController(Node):
     def _steer_sign(self):
         """right: target = center - delta (-1) | left: target = center + delta (+1)"""
         return 1.0 if self.follow_side == 'left' else -1.0
-
-    def _side_clearance(self, side):
-        d = self.left_avg if side == 'left' else self.right_avg
-        return float('inf') if math.isnan(d) else d
-
-    def _choose_turn_side(self):
-        """
-        Decide hacia dónde girar en la evasión.
-        Prioridad 1: color vigente -> gira hacia el lado que dicta el color.
-        Prioridad 2 (o si ese lado está bloqueado): lado con más espacio libre.
-        Devuelve (side, motivo).
-        """
-        if self._color_active():
-            side = self.color_to_side[self.active_color]
-            if self._side_clearance(side) >= self.min_turn_clearance:
-                return side, f'color:{self.active_color}'
-            self.get_logger().warn(
-                f'Color {self.active_color} pide girar a {side}, pero solo hay '
-                f'{self._side_clearance(side):.2f} m. Uso espacio libre.'
-            )
-
-        left_val = self.left_avg if not math.isnan(self.left_avg) else 0.0
-        right_val = self.right_avg if not math.isnan(self.right_avg) else 0.0
-        return ('left' if left_val > right_val else 'right'), 'espacio_libre'
 
     # -------- lazo de control --------
     def control_loop(self):
@@ -325,9 +281,10 @@ class AckerLidarController(Node):
 
             # ===== 3) Evasión de obstáculo frontal =====
             if self.front_distance <= self.obstacle_thresh and (self.left_avg < 10.7 or self.right_avg < 10.7):
-                turn_side, motivo = self._choose_turn_side()
+                left_val = self.left_avg if not math.isnan(self.left_avg) else 0.0
+                right_val = self.right_avg if not math.isnan(self.right_avg) else 0.0
 
-                if turn_side == 'left':
+                if left_val > right_val:
                     self.send_servo(self.max_us, 0.1)   # gira a la IZQ
                     self.turn_direction = 'izquierda'
                 else:
@@ -336,9 +293,7 @@ class AckerLidarController(Node):
 
                 self.vel_pub.publish(Float32(data=self.turn_speed))
                 self._set_state('turning')
-                self.get_logger().info(
-                    f'Obstáculo a {self.front_distance:.2f} m. Giro {self.turn_direction} ({motivo}).'
-                )
+                self.get_logger().info(f'Obstáculo a {self.front_distance:.2f} m. Giro {self.turn_direction}.')
                 return
 
             # ===== 4) Seguidor de pared (PD) =====
@@ -361,12 +316,12 @@ class AckerLidarController(Node):
                 self.vel_pub.publish(Float32(data=self.speedMotor))
                 self.prev_error = error
 
-                col = self.active_color if self._color_active() else '-'
                 self.get_logger().info(
                     f'PD {side_label} | dist:{dist_side:.2f} e:{error:.3f} d:{self.deriv_filt:.3f} '
-                    f'servo:{int(target_us)} cono:{self.front_min_cone:.2f} color:{col}'
+                    f'servo:{int(target_us)} cono:{self.front_min_cone:.2f}'
                 )
             else:
+                # sin lectura del lado elegido: avanza recto y resetea D
                 self.send_servo(self.center_us, 0.1)
                 self.vel_pub.publish(Float32(data=self.speedMotor))
                 self.prev_error = 0.0

@@ -13,22 +13,24 @@ setup(
         ('share/' + package_name + '/launch',
          ['launch/controller.launch.py']),
          ('share/' + package_name + '/launch',
-         ['launch/pid.launch.py'])
+         ['launch/pid.launch.py']),
+	('share/' + package_name + '/launch',
+	 ['launch/wro.launch.py']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='ubuntu',
-    maintainer_email='renzo.damian.go@gmail.com',
+    maintainer_email='x@gmail.com',
     description='ROS 2 Robot Controller Package',
     license='TODO: License declaration',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'controller_node = ros_robot_controller.controller_node:main',
-            'acker_lidar_controller = ros_robot_controller.acker_lidar_node:main',
-            'follow_gap_node = ros_robot_controller.follow_gap_node:main',
+            'acker_lidar_node = ros_robot_controller.acker_lidar_node:main',
             'color_detection_node = ros_robot_controller.color_detection_node:main',
-            'reactive_follow_gap_node = ros_robot_controller.reactive_follow_gap_node:main'
+            'led=ros_robot_controller.led_ros:main',
+            'follow_gap_node = ros_robot_controller.reactive_follow_gap_node:main','motor=ros_robot_controller.motor:main','camara=ros_robot_controller.camara:main',
         ],
     },
 )
